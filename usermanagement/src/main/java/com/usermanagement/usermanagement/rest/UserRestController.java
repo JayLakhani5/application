@@ -39,7 +39,6 @@ public class UserRestController {
         return userService.getAllUsersWithRoles();
     }
 
-
     @GetMapping("/user/{id}")
     public UserAndRoleDTO getUserById(@PathVariable("id") int id) {
         return userService.getUserById(id);

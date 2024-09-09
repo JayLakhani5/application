@@ -10,8 +10,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.UUID;
-
 @RestController
 @RequiredArgsConstructor
 public class IdentityController {
@@ -35,10 +33,10 @@ public class IdentityController {
         try {
 
             if (jwtUtil.validateToken(token.getToken())) {
-                UUID sessionId = jwtUtil.extractSessionId(token.getToken());
+                String sessionId = jwtUtil.extractSessionId(token.getToken());
                 System.out.println("Extracted Session ID: " + sessionId);
 
-                if (!sessionService.isSessionValid(sessionId)) {
+                if (sessionService.isSessionValid(sessionId)) {
                     response.setValid(true);
                     response.setUserId(jwtUtil.extractUserId(token.getToken()));
                     response.setRoleId(jwtUtil.extractRoleId(token.getToken()));
@@ -84,7 +82,7 @@ public class IdentityController {
 
             TokenValidationResponse response = new TokenValidationResponse();
             String token = extractTokenFromHeader(authorizationHeader);
-            UUID sessionId = jwtUtil.extractSessionId(token);
+            String sessionId = jwtUtil.extractSessionId(token);
 
             if (jwtUtil.isTokenExpired(token)) {
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Token is expired.");

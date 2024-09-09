@@ -181,7 +181,6 @@ public class UserService {
 
         Integer tokenUserId = jwtClient.extractUserId(authHeader);
 
-
         if (!tokenUserId.equals(userId)) {
             throw new RuntimeException("Unauthorized access: Token does not match user ID.");
         }

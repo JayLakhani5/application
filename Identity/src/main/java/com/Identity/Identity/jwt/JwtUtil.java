@@ -10,7 +10,6 @@ import org.springframework.stereotype.Service;
 
 import java.util.Date;
 import java.util.List;
-import java.util.UUID;
 
 @Service
 public class JwtUtil {
@@ -55,10 +54,9 @@ public class JwtUtil {
         return decodeToken(token).getClaim("roleId").asList(Integer.class);
     }
 
-    public UUID extractSessionId(String token) {
+    public String extractSessionId(String token) {
         DecodedJWT decodedJWT = JWT_VERIFIER.verify(token);
-        String sessionIdString = decodedJWT.getClaim("sessionId").asString();
-        return UUID.fromString(sessionIdString); // Convert String to UUID
+        return decodedJWT.getClaim("sessionId").asString();
     }
 
     public boolean isTokenExpired(String token) {
