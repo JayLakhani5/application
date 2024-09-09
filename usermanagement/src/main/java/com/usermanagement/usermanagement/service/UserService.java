@@ -2,11 +2,15 @@ package com.usermanagement.usermanagement.service;
 
 import com.usermanagement.usermanagement.dto.UserAndRoleDTO;
 import com.usermanagement.usermanagement.dto.UserDTO;
+import com.usermanagement.usermanagement.dto.UserUpdateDTO;
 import com.usermanagement.usermanagement.entity.Role;
 import com.usermanagement.usermanagement.entity.User;
-import com.usermanagement.usermanagement.jwt.JwtUtil;
+import com.usermanagement.usermanagement.entity.UserSession;
+import com.usermanagement.usermanagement.identity.JwtClient;
 import com.usermanagement.usermanagement.repository.RoleRepository;
 import com.usermanagement.usermanagement.repository.UserRepository;
+import com.usermanagement.usermanagement.repository.UserSessionRepository;
+import com.usermanagement.usermanagement.request.TokenRequest;
 import com.usermanagement.usermanagement.request.UserRequest;
 import com.usermanagement.usermanagement.response.RoleResponse;
 import com.usermanagement.usermanagement.response.UserResponse;
@@ -14,10 +18,7 @@ import lombok.RequiredArgsConstructor;
 import org.mindrot.jbcrypt.BCrypt;
 import org.springframework.stereotype.Service;
 
-import java.util.ArrayList;
-import java.util.Date;
-import java.util.List;
-import java.util.Optional;
+import java.util.*;
 import java.util.regex.Pattern;
 
 @RequiredArgsConstructor
@@ -27,8 +28,12 @@ public class UserService {
     private static final Pattern PASSWORD_PATTERN = Pattern.compile(
             "^(?=.*[A-Z])(?=.*\\d)(?=.*[@$!%*?&])[A-Za-z\\d@$!%*?&]{9,}$"
     );
+    private static final Pattern CONTACT_NUMBER_PATTERN = Pattern.compile("^\\d{10}$");
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
+    private final JwtClient jwtClient;
+    private final UserSessionRepository userSessionRepository;
+
 
     public List<UserAndRoleDTO> getAllUsersWithRoles() {
         List<User> users = userRepository.findAll();
@@ -45,14 +50,14 @@ public class UserService {
     }
 
     private UserDTO convertToUserDTO(User user) {
-        UserDTO dto = new UserDTO();
-        dto.setId(user.getId());
-        dto.setFirstName(user.getFirstName());
-        dto.setLastName(user.getLastName());
-        dto.setEmail(user.getEmail());
-        dto.setContactNumber(user.getContactNumber());
-        dto.setAdmin(user.isAdmin());
-        return dto;
+        return UserDTO.builder()
+                .id(user.getId())
+                .firstName(user.getFirstName())
+                .lastName(user.getLastName())
+                .email(user.getEmail())
+                .contactNumber(user.getContactNumber())
+                .admin(user.isAdmin())
+                .build();
     }
 
 
@@ -63,7 +68,7 @@ public class UserService {
             User user = optionalUser.get();
             UserAndRoleDTO dto = new UserAndRoleDTO();
             dto.setUser(convertToUserDTO(user));
-            dto.setRoles(user.getRoles()); // Fetch roles from the user entity
+            dto.setRoles(user.getRoles());
             return dto;
         } else {
             throw new RuntimeException("User not found with ID: " + userId);
@@ -72,19 +77,29 @@ public class UserService {
 
 
     public UserResponse addUser(UserRequest userRequest) {
-        if (!isPasswordValid(userRequest.getPassword())) {
+        if (isPasswordValid(userRequest.password())) {
             throw new RuntimeException("Password must be at least 9 characters long, contain at least one uppercase letter, one number, and one special character.");
         }
+        if (isContactNumberValid(String.valueOf(userRequest.contactNumber()))) {
+            throw new RuntimeException("Contact number must be exactly 10 digits.");
+        }
+        Optional<User> byEmail = userRepository.findByEmail(userRequest.email());
+        if (byEmail.isPresent()) {
+            throw new RuntimeException("this email is already inserted " + userRequest.email());
+        }
+        Optional<User> byContactNumber = userRepository.findByContactNumber(userRequest.contactNumber());
+        if (byContactNumber.isPresent()) {
+            throw new RuntimeException("this contactNumber is already inserted " + userRequest.contactNumber());
+        }
         User user = new User();
-        user.setFirstName(userRequest.getFirstName());
-        user.setLastName(userRequest.getLastName());
-        user.setEmail(userRequest.getEmail());
-        user.setPassword(hashPassword(userRequest.getPassword()));
-        user.setContactNumber(userRequest.getContactNumber());
+        user.setFirstName(userRequest.firstName());
+        user.setLastName(userRequest.lastName());
+        user.setEmail(userRequest.email());
+        user.setPassword(hashPassword(userRequest.password()));
+        user.setContactNumber(userRequest.contactNumber());
         user.setCreatedDate(new Date());
-        user.setAdmin(userRequest.isAdmin());
-        // Fetch and set roles
-        for (Integer roleId : userRequest.getRoleIds()) {
+        user.setAdmin(userRequest.admin());
+        for (Integer roleId : userRequest.roleIds()) {
             Optional<Role> roleById = roleRepository.findById(roleId);
             if (roleById.isEmpty()) {
                 throw new RuntimeException("Role with ID " + roleId + " not found.");
@@ -92,29 +107,37 @@ public class UserService {
             Role role = roleById.get();
             user.addRole(role);
         }
-        // Save user and roles
+        UserSession userSession = new UserSession();
+        userSession.setUser(user);
+        userSession.setCreatedDate(new Date());
+        userSession.setActive(user.isAdmin());
         user = userRepository.save(user);
-        //create token
-        String token = JwtUtil.generateToken(user.getEmail());
-        // Convert to UserResponse
-        UserResponse userResponse = new UserResponse();
-        userResponse.setId(user.getId());
-        userResponse.setUuid(user.getUuid());
-        userResponse.setFirstName(user.getFirstName());
-        userResponse.setLastName(user.getLastName());
-        userResponse.setEmail(user.getEmail());
-        userResponse.setContactNumber(user.getContactNumber());
-        userResponse.setAdmin(user.isAdmin());
-        userResponse.setCreatedDate(user.getCreatedDate());
-        userResponse.setUpdatedDate(user.getUpdatedDate());
+        TokenRequest tokenRequest = new TokenRequest(
+                user.getId(),
+                user.getRoles().stream().map(Role::getId).toList(),
+                userSession.getSessionId()
+        );
 
-        // Convert roles to RoleResponse
+        String token = jwtClient.generateToken(tokenRequest);
+        userSessionRepository.save(userSession);
+        UserResponse userResponse = UserResponse.builder()
+                .id(user.getId())
+                .uuid(user.getUuid())
+                .firstName(user.getFirstName())
+                .lastName(user.getLastName())
+                .email(user.getEmail())
+                .contactNumber(user.getContactNumber())
+                .admin(user.isAdmin())
+                .createdDate(user.getCreatedDate())
+                .updatedDate(user.getUpdatedDate())
+                .password(user.getPassword())
+                .build();
         if (user.getRoles() != null) {
             List<RoleResponse> roleResponses = new ArrayList<>();
             for (Role role : user.getRoles()) {
                 RoleResponse roleResponse = new RoleResponse();
                 roleResponse.setId(role.getId());
-                roleResponse.setUuid(role.getUuid());
+                roleResponse.setUuid(role.getUuid().toString());
                 roleResponse.setRoleName(role.getRoleName());
                 roleResponse.setAdmin(role.isAdmin());
                 roleResponse.setCreatedDate(role.getCreatedDate());
@@ -125,34 +148,91 @@ public class UserService {
             }
             userResponse.setRoles(roleResponses);
             userResponse.setPassword(user.getPassword());
-            System.out.println("password is" + userResponse.getPassword());
+
         }
         userResponse.setToken(token);
         return userResponse;
     }
 
+    private boolean isContactNumberValid(String contactNumber) {
+        return !CONTACT_NUMBER_PATTERN.matcher(contactNumber).matches();
+    }
+
     private boolean isPasswordValid(String password) {
-        return PASSWORD_PATTERN.matcher(password).matches();
+        return !PASSWORD_PATTERN.matcher(password).matches();
     }
 
     private String hashPassword(String password) {
         return BCrypt.hashpw(password, BCrypt.gensalt());
     }
 
-    public boolean checkPassword(String plainPassword, String hashedPassword) {
-        return BCrypt.checkpw(plainPassword, hashedPassword);
-    }
-
-
     public String checkPassword() {
         String hashedPassword = "$2a$10$c8eb9aEykni1tIcKqYgOp.7/1CEmkoxYJtb4dx4kEHfBtbSBEAkUW";
-        String candidatePassword = "Yash@1234"; // The password you want to check
+        String candidatePassword = "Yash@1234";
 
         if (BCrypt.checkpw(candidatePassword, hashedPassword)) {
             return "password match";
         } else {
             return "password not match";
         }
+    }
+
+    public UserUpdateDTO updateUser(String authHeader, int userId, UserRequest userRequest) {
+
+        Integer tokenUserId = jwtClient.extractUserId(authHeader);
+
+
+        if (!tokenUserId.equals(userId)) {
+            throw new RuntimeException("Unauthorized access: Token does not match user ID.");
+        }
+
+        Optional<User> existingUserOpt = userRepository.findById(userId);
+        if (existingUserOpt.isEmpty()) {
+            throw new RuntimeException("User not found with id " + userId);
+        }
+
+        User user = existingUserOpt.get();
+
+        if (isPasswordValid(userRequest.password())) {
+            throw new RuntimeException("Password must be at least 9 characters long, contain at least one uppercase letter, one number, and one special character.");
+        }
+        if (isContactNumberValid(String.valueOf(userRequest.contactNumber()))) {
+            throw new RuntimeException("Contact number must be exactly 10 digits.");
+        }
+
+        if (!user.getEmail().equals(userRequest.email())) {
+            Optional<User> byEmail = userRepository.findByEmail(userRequest.email());
+            if (byEmail.isPresent()) {
+                throw new RuntimeException("Email is already in use: " + userRequest.email());
+            }
+        }
+
+        if (!Objects.equals(user.getContactNumber(), userRequest.contactNumber())) {
+            Optional<User> byContactNumber = userRepository.findByContactNumber(userRequest.contactNumber());
+            if (byContactNumber.isPresent() && byContactNumber.get().getId() != userId) {
+                throw new RuntimeException("Contact number is already in use: " + userRequest.contactNumber());
+            }
+        }
+
+        user.setFirstName(userRequest.firstName());
+        user.setLastName(userRequest.lastName());
+        user.setEmail(userRequest.email());
+        user.setPassword(hashPassword(userRequest.password()));
+        user.setContactNumber(userRequest.contactNumber());
+        user.setAdmin(userRequest.admin());
+        user.setUpdatedDate(new Date());
+        userRepository.save(user);
+
+        UserUpdateDTO userUpdateDTO = UserUpdateDTO.builder()
+                .id(user.getId())
+                .firstName(user.getFirstName())
+                .lastName(user.getLastName())
+                .email(user.getEmail())
+                .contactNumber(user.getContactNumber())
+                .admin(user.isAdmin())
+                .updateDate(user.getUpdatedDate())
+                .build();
+        return userUpdateDTO;
     }
 }
 

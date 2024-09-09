@@ -20,7 +20,6 @@ public class FileProcessor {
     private int id;
     @Column(name = "file_name")
     private String fileName;
-
     @Column(name = "status")
     @Enumerated(EnumType.STRING)
     private Status status;

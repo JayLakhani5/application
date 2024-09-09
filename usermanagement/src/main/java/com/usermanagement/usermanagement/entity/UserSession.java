@@ -18,13 +18,13 @@ public class UserSession {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     @Column(name = "id")
     private int id;
-    @Column(name = "session_id")
+    @Column(name = "session_id", unique = true)
     private UUID sessionId = UUID.randomUUID();
     @OneToOne(cascade = CascadeType.ALL)
     @JoinColumn(name = "user_id")
-    private User userId;
+    private User user;
     @Column(name = "enable")
-    private boolean enable;
+    private boolean isActive = true;
     @Column(name = "created_date")
     private Date createdDate;
     @Column(name = "updated_date")

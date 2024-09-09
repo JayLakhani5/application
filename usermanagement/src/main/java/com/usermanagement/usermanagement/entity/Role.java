@@ -21,7 +21,7 @@ public class Role {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     @Column(name = "id")
     private int id;
-    @Column(name = "uuid")
+    @Column(name = "uuid", unique = true, nullable = false)
     private UUID uuid = UUID.randomUUID();
     @Column(name = "role_name")
     private String roleName;
