@@ -1,12 +1,11 @@
-package com.Identity.Identity.response;
+package com.usermanagement.usermanagement.response;
 
 import lombok.Getter;
-import lombok.Setter;
+import org.springframework.stereotype.Service;
 
 @Getter
-@Setter
+@Service
 public class TokenResponse {
     private String token;
     private long expireTime;
-
 }

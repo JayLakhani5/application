@@ -1,11 +1,10 @@
 package com.usermanagement.usermanagement.service;
 
-import com.usermanagement.usermanagement.dto.UserAndRoleDTO;
-import com.usermanagement.usermanagement.dto.UserDTO;
-import com.usermanagement.usermanagement.dto.UserUpdateDTO;
+import com.usermanagement.usermanagement.dto.*;
 import com.usermanagement.usermanagement.entity.Role;
 import com.usermanagement.usermanagement.entity.User;
 import com.usermanagement.usermanagement.entity.UserSession;
+import com.usermanagement.usermanagement.enums.Roles;
 import com.usermanagement.usermanagement.identity.JwtClient;
 import com.usermanagement.usermanagement.repository.RoleRepository;
 import com.usermanagement.usermanagement.repository.UserRepository;
@@ -13,29 +12,46 @@ import com.usermanagement.usermanagement.repository.UserSessionRepository;
 import com.usermanagement.usermanagement.request.TokenRequest;
 import com.usermanagement.usermanagement.request.UserRequest;
 import com.usermanagement.usermanagement.response.RoleResponse;
+import com.usermanagement.usermanagement.response.TokenResponse;
 import com.usermanagement.usermanagement.response.UserResponse;
+import com.usermanagement.usermanagement.validations.ValidationUtils;
 import lombok.RequiredArgsConstructor;
-import org.mindrot.jbcrypt.BCrypt;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.*;
-import java.util.regex.Pattern;
 
 @RequiredArgsConstructor
 @Service
 public class UserService {
 
-    private static final Pattern PASSWORD_PATTERN = Pattern.compile(
-            "^(?=.*[A-Z])(?=.*\\d)(?=.*[@$!%*?&])[A-Za-z\\d@$!%*?&]{9,}$"
-    );
-    private static final Pattern CONTACT_NUMBER_PATTERN = Pattern.compile("^\\d{10}$");
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
     private final JwtClient jwtClient;
     private final UserSessionRepository userSessionRepository;
 
 
-    public List<UserAndRoleDTO> getAllUsersWithRoles() {
+    public List<UserAndRoleDTO> getAllUsersWithRoles(String authHeader) {
+
+        Roles roles = Roles.ADMIN;
+        int adminRole = roles.getValue();
+        Token getToken = new Token();
+        getToken.setToken(authHeader);
+        TokenValidationResponse tokenResponse = jwtClient.validateToken(getToken);
+        if (tokenResponse.isExpired()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "token is expired");
+        }
+        UUID sessionId = UUID.fromString(tokenResponse.getSessionId());
+        UserSession userSession = userSessionRepository.findBySessionId(sessionId);
+
+        if (userSession == null || !userSession.isActive()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Session is invalid");
+        }
+        if (tokenResponse.getRoleId() == null || !tokenResponse.getRoleId().contains(adminRole)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You are not an admin");
+        }
+
         List<User> users = userRepository.findAll();
         List<UserAndRoleDTO> userAndRoleDTOs = new ArrayList<>();
 
@@ -45,7 +61,6 @@ public class UserService {
             dto.setRoles(user.getRoles());
             userAndRoleDTOs.add(dto);
         }
-
         return userAndRoleDTOs;
     }
 
@@ -61,8 +76,21 @@ public class UserService {
     }
 
 
-    public UserAndRoleDTO getUserById(int userId) {
-        Optional<User> optionalUser = userRepository.findById(userId);
+    public UserAndRoleDTO getUserById(String authHeader) {
+        Token getToken = new Token();
+        getToken.setToken(authHeader);
+        TokenValidationResponse validationResponse = jwtClient.validateToken(getToken);
+        UUID sessionId = UUID.fromString(validationResponse.getSessionId());
+        UserSession userSession = userSessionRepository.findBySessionId(sessionId);
+
+        if (userSession == null || !userSession.isActive()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Session is invalid");
+        }
+        if (!validationResponse.getUserId().equals(validationResponse.getUserId())) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Unauthorized access: Token does not match user ID.");
+        }
+
+        Optional<User> optionalUser = userRepository.findById(validationResponse.getUserId());
 
         if (optionalUser.isPresent()) {
             User user = optionalUser.get();
@@ -71,31 +99,28 @@ public class UserService {
             dto.setRoles(user.getRoles());
             return dto;
         } else {
-            throw new RuntimeException("User not found with ID: " + userId);
+            throw new RuntimeException("User not found with ID: " + validationResponse.getUserId());
         }
     }
 
 
     public UserResponse addUser(UserRequest userRequest) {
-        if (isPasswordValid(userRequest.password())) {
-            throw new RuntimeException("Password must be at least 9 characters long, contain at least one uppercase letter, one number, and one special character.");
-        }
-        if (isContactNumberValid(String.valueOf(userRequest.contactNumber()))) {
-            throw new RuntimeException("Contact number must be exactly 10 digits.");
-        }
+        // Validate user request data
+        ValidationUtils.validatePassword(userRequest.password());
+        ValidationUtils.validateContactNumber(String.valueOf(userRequest.contactNumber()));
         Optional<User> byEmail = userRepository.findByEmail(userRequest.email());
         if (byEmail.isPresent()) {
-            throw new RuntimeException("this email is already inserted " + userRequest.email());
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "This email is already in use: " + userRequest.email());
         }
         Optional<User> byContactNumber = userRepository.findByContactNumber(userRequest.contactNumber());
         if (byContactNumber.isPresent()) {
-            throw new RuntimeException("this contactNumber is already inserted " + userRequest.contactNumber());
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "This contact number is already in use: " + userRequest.contactNumber());
         }
         User user = new User();
         user.setFirstName(userRequest.firstName());
         user.setLastName(userRequest.lastName());
         user.setEmail(userRequest.email());
-        user.setPassword(hashPassword(userRequest.password()));
+        user.setPassword(ValidationUtils.hashPassword(userRequest.password()));
         user.setContactNumber(userRequest.contactNumber());
         user.setCreatedDate(new Date());
         user.setAdmin(userRequest.admin());
@@ -118,7 +143,7 @@ public class UserService {
                 userSession.getSessionId()
         );
 
-        String token = jwtClient.generateToken(tokenRequest);
+        TokenResponse token = jwtClient.createToken(tokenRequest);
         userSessionRepository.save(userSession);
         UserResponse userResponse = UserResponse.builder()
                 .id(user.getId())
@@ -150,73 +175,52 @@ public class UserService {
             userResponse.setPassword(user.getPassword());
 
         }
-        userResponse.setToken(token);
+        userResponse.setToken(token.getToken());
         return userResponse;
     }
 
-    private boolean isContactNumberValid(String contactNumber) {
-        return !CONTACT_NUMBER_PATTERN.matcher(contactNumber).matches();
-    }
-
-    private boolean isPasswordValid(String password) {
-        return !PASSWORD_PATTERN.matcher(password).matches();
-    }
-
-    private String hashPassword(String password) {
-        return BCrypt.hashpw(password, BCrypt.gensalt());
-    }
-
-    public String checkPassword() {
-        String hashedPassword = "$2a$10$c8eb9aEykni1tIcKqYgOp.7/1CEmkoxYJtb4dx4kEHfBtbSBEAkUW";
-        String candidatePassword = "Yash@1234";
-
-        if (BCrypt.checkpw(candidatePassword, hashedPassword)) {
-            return "password match";
-        } else {
-            return "password not match";
-        }
-    }
 
     public UserUpdateDTO updateUser(String authHeader, int userId, UserRequest userRequest) {
+        Token getToken = new Token();
+        getToken.setToken(authHeader);
+        TokenValidationResponse validationResponse = jwtClient.validateToken(getToken);
+        UUID sessionId = UUID.fromString(validationResponse.getSessionId());
+        UserSession userSession = userSessionRepository.findBySessionId(sessionId);
 
-        Integer tokenUserId = jwtClient.extractUserId(authHeader);
-
-        if (!tokenUserId.equals(userId)) {
-            throw new RuntimeException("Unauthorized access: Token does not match user ID.");
+        if (userSession == null || !userSession.isActive()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Session is invalid");
         }
-
+        if (!validationResponse.getUserId().equals(userId)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Unauthorized access: Token does not match user ID.");
+        }
         Optional<User> existingUserOpt = userRepository.findById(userId);
         if (existingUserOpt.isEmpty()) {
             throw new RuntimeException("User not found with id " + userId);
         }
-
         User user = existingUserOpt.get();
 
-        if (isPasswordValid(userRequest.password())) {
-            throw new RuntimeException("Password must be at least 9 characters long, contain at least one uppercase letter, one number, and one special character.");
-        }
-        if (isContactNumberValid(String.valueOf(userRequest.contactNumber()))) {
-            throw new RuntimeException("Contact number must be exactly 10 digits.");
-        }
+        // Validate user request data
+        ValidationUtils.validatePassword(userRequest.password());
+        ValidationUtils.validateContactNumber(String.valueOf(userRequest.contactNumber()));
 
         if (!user.getEmail().equals(userRequest.email())) {
             Optional<User> byEmail = userRepository.findByEmail(userRequest.email());
             if (byEmail.isPresent()) {
-                throw new RuntimeException("Email is already in use: " + userRequest.email());
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "This email is already in use: " + userRequest.email());
             }
         }
 
         if (!Objects.equals(user.getContactNumber(), userRequest.contactNumber())) {
             Optional<User> byContactNumber = userRepository.findByContactNumber(userRequest.contactNumber());
             if (byContactNumber.isPresent() && byContactNumber.get().getId() != userId) {
-                throw new RuntimeException("Contact number is already in use: " + userRequest.contactNumber());
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Contact number is already in use: " + userRequest.contactNumber());
             }
         }
 
         user.setFirstName(userRequest.firstName());
         user.setLastName(userRequest.lastName());
         user.setEmail(userRequest.email());
-        user.setPassword(hashPassword(userRequest.password()));
+        user.setPassword(ValidationUtils.hashPassword(userRequest.password()));
         user.setContactNumber(userRequest.contactNumber());
         user.setAdmin(userRequest.admin());
         user.setUpdatedDate(new Date());

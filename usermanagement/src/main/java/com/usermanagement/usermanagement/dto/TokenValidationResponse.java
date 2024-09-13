@@ -1,17 +1,17 @@
-package com.usermanagement.usermanagement.response;
+package com.usermanagement.usermanagement.dto;
 
 import lombok.Getter;
 import lombok.Setter;
 
 import java.util.List;
-import java.util.UUID;
 
 @Getter
 @Setter
 public class TokenValidationResponse {
     private Integer userId;
     private List<Integer> roleId;
-    private UUID sessionId;
+    private String sessionId;
     private boolean valid;
+    private boolean expired;
+    private long expireTime;
 }
-

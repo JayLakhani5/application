@@ -8,6 +8,7 @@ import com.usermanagement.usermanagement.entity.FileProcessor;
 import com.usermanagement.usermanagement.entity.Role;
 import com.usermanagement.usermanagement.entity.User;
 import com.usermanagement.usermanagement.entity.UserSession;
+import com.usermanagement.usermanagement.enums.Roles;
 import com.usermanagement.usermanagement.enums.Status;
 import com.usermanagement.usermanagement.identity.JwtClient;
 import com.usermanagement.usermanagement.repository.FileProcessorRepository;
@@ -15,6 +16,7 @@ import com.usermanagement.usermanagement.repository.RoleRepository;
 import com.usermanagement.usermanagement.repository.UserRepository;
 import com.usermanagement.usermanagement.repository.UserSessionRepository;
 import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.mindrot.jbcrypt.BCrypt;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -24,12 +26,15 @@ import org.springframework.web.server.ResponseStatusException;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.util.*;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.regex.Pattern;
 
 @AllArgsConstructor
 @Service
-public class FileProcessorService {
-
+@Slf4j
+public class CsvFileService {
     private static final Pattern PASSWORD_PATTERN = Pattern.compile(
             "^(?=.*[A-Z])(?=.*\\d)(?=.*[@$!%*?&])[A-Za-z\\d@$!%*?&]{9,}$"
     );
@@ -40,7 +45,12 @@ public class FileProcessorService {
     private final JwtClient jwtClient;
     private final UserSessionRepository userSessionRepository;
 
+    // Use virtual thread executor for I/O-bound tasks
+    private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+
     public String processCsvFile(MultipartFile file, String authorizationHeader) {
+
+        Roles roles = Roles.ADMIN;
         Token getToken = new Token();
         getToken.setToken(authorizationHeader);
         TokenValidationResponse tokenResponse = jwtClient.validateToken(getToken);
@@ -50,8 +60,8 @@ public class FileProcessorService {
         if (userSession == null || !userSession.isActive()) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Session is invalid");
         }
-        if (tokenResponse.getRoleId() == null || !tokenResponse.getRoleId().contains(8)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "you are not admin ");
+        if (tokenResponse.getRoleId() == null || !tokenResponse.getRoleId().contains(roles.getValue())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You are not an admin");
         }
 
         String fileName = file.getOriginalFilename();
@@ -65,23 +75,27 @@ public class FileProcessorService {
                 return "CSV file is empty.";
             }
 
+            // Submit tasks for each record
+            List<Future<?>> futures = new ArrayList<>();
             for (int i = 1; i < records.size(); i++) {
                 String[] record = records.get(i);
                 if (record.length < 7) {
                     continue;
                 }
-                String email = record[2];
-                Optional<User> existingUser = userRepository.findByEmail(email);
-                if (existingUser.isPresent()) {
-                    User user = existingUser.get();
-                    updateUser(user, record);
-                    saveFileProcessor(fileName, Status.Success, "User updated successfully.", user);
-                } else {
-                    User newUser = createUser(record);
-                    userRepository.save(newUser);
-                    saveFileProcessor(fileName, Status.Success, "User created successfully.", newUser);
+                futures.add(executor.submit(() -> processRecord(record, fileName)));
+            }
+
+            // Wait for all tasks to complete
+            for (Future<?> future : futures) {
+                try {
+                    future.get(); // Ensure exceptions are propagated
+                } catch (Exception e) {
+                    saveFileProcessor(fileName, Status.Error, "Error processing file: " + e.getMessage(), null);
+                    e.printStackTrace();
+                    return "Error occurred while processing CSV file.";
                 }
             }
+
             return "CSV file processed successfully.";
         } catch (IOException | CsvException e) {
             saveFileProcessor(fileName, Status.Error, "Error processing file: " + e.getMessage(), null);
@@ -90,14 +104,36 @@ public class FileProcessorService {
         }
     }
 
+    private void processRecord(String[] record, String fileName) {
+        try {
+            log.info("CSV process record..");
+            String email = record[2];
+            Optional<User> existingUser = userRepository.findByEmail(email);
+            if (existingUser.isPresent()) {
+                User user = existingUser.get();
+                updateUser(user, record);
+                saveFileProcessor(fileName, Status.Success, "User updated successfully.", user);
+            } else {
+                User newUser = createUser(record);
+                log.info("new user => {}", newUser);
+                userRepository.save(newUser);
+                saveFileProcessor(fileName, Status.Success, "User created successfully.", newUser);
+
+            }
+        } catch (Exception e) {
+            saveFileProcessor(fileName, Status.Error, "Error processing record: " + e.getMessage(), null);
+            e.printStackTrace();
+        }
+    }
+
     private User createUser(String[] record) {
         if (record.length < 7) {
             throw new IllegalArgumentException("Insufficient data in record");
         }
-        if (isPasswordValid(record[4])) {
+        if (!isPasswordValid(record[4])) {
             throw new RuntimeException("Password must be at least 9 characters long, contain at least one uppercase letter, one number, and one special character.");
         }
-        if (isContactNumberValid(String.valueOf(record[3]))) {
+        if (!isContactNumberValid(String.valueOf(record[3]))) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Contact number must be exactly 10 digits.");
         }
         User user = new User();
@@ -110,18 +146,22 @@ public class FileProcessorService {
         user.setAdmin(Boolean.parseBoolean(record[5]));
         user.setCreatedDate(new Date());
         setUserRoles(user, record[6]);
+        if (user == null) {
+            throw new RuntimeException("User creation failed.");
+        }
         return user;
     }
+
 
     private void updateUser(User user, String[] record) {
         if (record.length < 7) {
             throw new IllegalArgumentException("Insufficient data in record");
         }
-        if (isPasswordValid(record[4])) {
+        if (!isPasswordValid(record[4])) {
             throw new RuntimeException("Password must be at least 9 characters long, contain at least one uppercase letter, one number, and one special character.");
         }
-        if (isContactNumberValid(String.valueOf(record[3]))) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Contact number must be exactly 10 digits.");
+        if (!isContactNumberValid(record[3])) {
+            throw new RuntimeException("Contact number must be exactly 10 digits.");
         }
         user.setFirstName(record[0]);
         user.setLastName(record[1]);
@@ -145,7 +185,11 @@ public class FileProcessorService {
 
     private void saveFileProcessor(String fileName, Status status, String reason, User user) {
         Optional<FileProcessor> existingFileProcessor = fileProcessorRepository.findFirstByUserId(user.getId());
-
+        if (user == null) {
+            log.warn("Cannot save file processor record: user is null");
+            return; // Exit early if user is null
+        }
+        System.out.println("user id ->" + user.getId());
         FileProcessor fileProcessor;
 
         if (existingFileProcessor.isPresent()) {
@@ -155,7 +199,6 @@ public class FileProcessorService {
             fileProcessor.setUpdatedDate(new Date());
             fileProcessor.setReason(reason);
         } else {
-
             fileProcessor = new FileProcessor();
             fileProcessor.setFileName(fileName);
             fileProcessor.setStatus(status);
@@ -173,11 +216,10 @@ public class FileProcessorService {
     }
 
     private boolean isPasswordValid(String password) {
-        return !PASSWORD_PATTERN.matcher(password).matches();
+        return PASSWORD_PATTERN.matcher(password).matches();
     }
 
     private boolean isContactNumberValid(String contactNumber) {
-        return !CONTACT_NUMBER_PATTERN.matcher(contactNumber).matches();
+        return CONTACT_NUMBER_PATTERN.matcher(contactNumber).matches();
     }
-
 }

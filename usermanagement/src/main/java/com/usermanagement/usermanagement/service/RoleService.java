@@ -1,12 +1,20 @@
 package com.usermanagement.usermanagement.service;
 
 
+import com.usermanagement.usermanagement.dto.Token;
+import com.usermanagement.usermanagement.dto.TokenValidationResponse;
 import com.usermanagement.usermanagement.entity.Role;
+import com.usermanagement.usermanagement.entity.UserSession;
+import com.usermanagement.usermanagement.enums.Roles;
+import com.usermanagement.usermanagement.identity.JwtClient;
 import com.usermanagement.usermanagement.repository.RoleRepository;
+import com.usermanagement.usermanagement.repository.UserSessionRepository;
 import com.usermanagement.usermanagement.request.RoleRequest;
 import com.usermanagement.usermanagement.response.RoleResponse;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Date;
 import java.util.Optional;
@@ -17,8 +25,24 @@ import java.util.UUID;
 public class RoleService {
 
     private final RoleRepository roleRepository;
+    private final JwtClient jwtClient;
+    private final UserSessionRepository userSessionRepository;
 
-    public RoleResponse addOrUpdateRole(RoleRequest request) {
+    public RoleResponse addOrUpdateRole(RoleRequest request, String authHeader) {
+        Roles roles = Roles.ADMIN;
+        Token getToken = new Token();
+        getToken.setToken(authHeader);
+        TokenValidationResponse tokenResponse = jwtClient.validateToken(getToken);
+        UUID sessionId = UUID.fromString(tokenResponse.getSessionId());
+        UserSession userSession = userSessionRepository.findBySessionId(sessionId);
+
+        if (userSession == null || !userSession.isActive()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Session is invalid");
+        }
+        if (tokenResponse.getRoleId() == null || !tokenResponse.getRoleId().contains(roles.getValue())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You are not an admin");
+        }
+
         Optional<Role> existingRoleOptional = roleRepository.findByRoleName(request.getRoleName());
         Role role;
         if (existingRoleOptional.isPresent()) {

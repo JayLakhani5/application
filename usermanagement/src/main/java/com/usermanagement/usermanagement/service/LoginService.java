@@ -8,17 +8,22 @@ import com.usermanagement.usermanagement.repository.UserRepository;
 import com.usermanagement.usermanagement.repository.UserSessionRepository;
 import com.usermanagement.usermanagement.request.TokenRequest;
 import com.usermanagement.usermanagement.response.RoleResponse;
+import com.usermanagement.usermanagement.response.TokenResponse;
 import com.usermanagement.usermanagement.response.UserResponse;
 import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
+import java.util.UUID;
 
+@Slf4j
 @AllArgsConstructor
 @Service
 public class LoginService {
@@ -40,15 +45,20 @@ public class LoginService {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(null);
 
         }
+        if (!user.isAdmin()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "You are not login");
+        }
         List<Integer> roleIds = user.getRoles().stream()
                 .map(Role::getId)
                 .toList();
 
-        System.out.println("datttaaaa" + roleIds);
+
+        log.info("rolesId -> {}", roleIds);
 
         UserSession userSession = new UserSession();
         userSession.setUser(user);
         userSession.setCreatedDate(new Date());
+        userSession.setActive(userSession.isActive());
         userSession = userSessionRepository.save(userSession);
 
 
@@ -57,8 +67,7 @@ public class LoginService {
                 roleIds,
                 userSession.getSessionId()
         );
-        String token = jwtClient.generateToken(tokenRequest);
-
+        TokenResponse token = jwtClient.createToken(tokenRequest);
         UserResponse userResponse = UserResponse.builder()
                 .id(user.getId())
                 .uuid(user.getUuid())
@@ -69,7 +78,7 @@ public class LoginService {
                 .admin(user.isAdmin())
                 .createdDate(user.getCreatedDate())
                 .updatedDate(user.getUpdatedDate())
-                .token(token)
+                .token(token.getToken())
                 .password(user.getPassword())
                 .build();
 
@@ -89,6 +98,15 @@ public class LoginService {
         }
 
         return ResponseEntity.ok(userResponse);
+    }
+
+    public void logout(UUID sessionId) {
+        UserSession userSession = userSessionRepository.findBySessionId(sessionId);
+        if (userSession == null || !userSession.isActive()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Session is invalid or already inactive");
+        }
+        userSession.setActive(false);
+        userSessionRepository.save(userSession);
     }
 
 }

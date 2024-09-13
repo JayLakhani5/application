@@ -1,9 +1,7 @@
 package com.usermanagement.usermanagement.rest;
 
-import com.usermanagement.usermanagement.service.FileProcessorService;
+import com.usermanagement.usermanagement.service.CsvFileService;
 import lombok.AllArgsConstructor;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -14,15 +12,20 @@ import org.springframework.web.multipart.MultipartFile;
 
 @AllArgsConstructor
 @RestController
-public class FileProcessController {
-    private static final Logger logger = LoggerFactory.getLogger(FileProcessController.class);
-    private final FileProcessorService fileProcessorService;
+public class CsvFileRest {
+    private final CsvFileService csvFileService;
 
-    @PostMapping("/upload")
+    @PostMapping("/upload-csv")
     public ResponseEntity<String> uploadCsvFile(
             @RequestParam("file") MultipartFile file,
             @RequestHeader("Authorization") String authorizationHeader) {
-        String result = fileProcessorService.processCsvFile(file, authorizationHeader);
-        return new ResponseEntity<>(result, HttpStatus.OK);
+        try {
+            String response = csvFileService.processCsvFile(file, authorizationHeader);
+            return ResponseEntity.ok(response);
+        } catch (RuntimeException e) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(e.getMessage());
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("An unexpected error occurred.");
+        }
     }
 }

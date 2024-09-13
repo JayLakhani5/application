@@ -12,5 +12,6 @@ public class TokenValidationResponse {
     private List<Integer> roleId;
     private String sessionId;
     private boolean valid;
+    private boolean expired;
+    private long expireTime;
 }
-

@@ -6,10 +6,7 @@ import com.usermanagement.usermanagement.request.RoleRequest;
 import com.usermanagement.usermanagement.response.RoleResponse;
 import com.usermanagement.usermanagement.service.RoleService;
 import lombok.RequiredArgsConstructor;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
@@ -25,9 +22,7 @@ public class RoleController {
     }
 
     @PostMapping("/role")
-    public RoleResponse addRole(@RequestBody RoleRequest request) {
-        return roleService.addOrUpdateRole(request);
+    public RoleResponse addRole(@RequestBody RoleRequest request, @RequestHeader("Authorization") String authorizationHeader) {
+        return roleService.addOrUpdateRole(request, authorizationHeader);
     }
-
-
 }

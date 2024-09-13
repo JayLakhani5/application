@@ -1,8 +1,6 @@
 package com.usermanagement.usermanagement.rest;
 
-import com.usermanagement.usermanagement.dto.Login;
-import com.usermanagement.usermanagement.dto.UserAndRoleDTO;
-import com.usermanagement.usermanagement.dto.UserUpdateDTO;
+import com.usermanagement.usermanagement.dto.*;
 import com.usermanagement.usermanagement.entity.User;
 import com.usermanagement.usermanagement.identity.JwtClient;
 import com.usermanagement.usermanagement.request.UserRequest;
@@ -10,10 +8,13 @@ import com.usermanagement.usermanagement.response.UserResponse;
 import com.usermanagement.usermanagement.service.LoginService;
 import com.usermanagement.usermanagement.service.UserService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
+import java.util.UUID;
 
 @RestController
 @RequiredArgsConstructor
@@ -29,19 +30,14 @@ public class UserRestController {
         return userService.addUser(request);
     }
 
-    @GetMapping("/pass")
-    public String checkPassword() {
-        return userService.checkPassword();
-    }
-
     @GetMapping("/user")
-    public List<UserAndRoleDTO> getAllUsersWithRoles() {
-        return userService.getAllUsersWithRoles();
+    public List<UserAndRoleDTO> getAllUsersWithRoles(@RequestHeader("Authorization") String authorizationHeader) {
+        return userService.getAllUsersWithRoles(authorizationHeader);
     }
 
-    @GetMapping("/user/{id}")
-    public UserAndRoleDTO getUserById(@PathVariable("id") int id) {
-        return userService.getUserById(id);
+    @GetMapping("/userbyid")
+    public UserAndRoleDTO getUserById(@RequestHeader("Authorization") String authorizationHeader) {
+        return userService.getUserById(authorizationHeader);
     }
 
     @PostMapping("/login")
@@ -64,10 +60,27 @@ public class UserRestController {
         return userService.updateUser(authorizationHeader, id, request);
     }
 
-    @PostMapping("/logout")
-    public String logout(@RequestHeader("Authorization") String authorizationHeader) {
-        return jwtClient.logout(authorizationHeader);
-    }
 
+    @PostMapping("/logout")
+    public ResponseEntity<String> logout1(@RequestHeader("Authorization") String authHeader) {
+        Token getToken = new Token();
+        getToken.setToken(authHeader);
+        TokenValidationResponse tokenResponse = jwtClient.validateToken(getToken);
+        if (tokenResponse.isExpired()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "token is expired");
+        }
+        UUID sessionId;
+        try {
+            sessionId = UUID.fromString(tokenResponse.getSessionId());
+        } catch (IllegalArgumentException e) {
+            return new ResponseEntity<>("Invalid session ID", HttpStatus.BAD_REQUEST);
+        }
+        try {
+            loginService.logout(sessionId);
+        } catch (RuntimeException e) {
+            return new ResponseEntity<>(e.getMessage(), HttpStatus.BAD_REQUEST);
+        }
+        return new ResponseEntity<>("Successfully logged out", HttpStatus.OK);
+    }
 }
 

@@ -4,22 +4,31 @@ package com.Identity.Identity.jwt;
 import com.Identity.Identity.request.TokenRequest;
 import com.auth0.jwt.JWT;
 import com.auth0.jwt.algorithms.Algorithm;
+import com.auth0.jwt.interfaces.Claim;
 import com.auth0.jwt.interfaces.DecodedJWT;
 import com.auth0.jwt.interfaces.JWTVerifier;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.Date;
-import java.util.List;
+import java.util.Map;
 
 @Service
 public class JwtUtil {
 
-    private static final String SECRET_KEY = "your-very-secure-secret-key";
-    private static final Algorithm ALGORITHM = Algorithm.HMAC256(SECRET_KEY);
-    private static final JWTVerifier JWT_VERIFIER = JWT.require(ALGORITHM).build();
+    private final JwtProperties jwtProperties;
+    private final Algorithm algorithm;
+    private final JWTVerifier jwtVerifier;
+
+    @Autowired
+    public JwtUtil(JwtProperties jwtProperties) {
+        this.jwtProperties = jwtProperties;
+        algorithm = Algorithm.HMAC256(jwtProperties.getSecretKey());
+        jwtVerifier = JWT.require(algorithm).build();
+    }
+
 
     public String generateToken(TokenRequest request) {
-
         if (request.getUserId() == null || request.getRoleId() == null) {
             throw new IllegalArgumentException("Invalid TokenRequest: userId, roleId, and sessionId must be provided.");
         }
@@ -27,43 +36,70 @@ public class JwtUtil {
             throw new IllegalArgumentException("Invalid TokenRequest: roleId cannot be empty.");
         }
 
+        long expirationMillis = jwtProperties.getTokenExpirationMinutes() * 60 * 1000;
+
         return JWT.create()
                 .withClaim("userId", request.getUserId())
                 .withClaim("roleId", request.getRoleId())
                 .withClaim("sessionId", request.getSessionId().toString())
                 .withIssuedAt(new Date())
-                .withExpiresAt(new Date(System.currentTimeMillis() + 1000 * 60 * 60 * 3)) // 3hr
-                .sign(ALGORITHM);
+                .withExpiresAt(new Date(System.currentTimeMillis() + expirationMillis))
+                .sign(algorithm);
     }
 
 
     public DecodedJWT decodeToken(String token) {
-        return JWT_VERIFIER.verify(token);
-    }
-
-    public Integer extractUserId(String token) {
         try {
-            DecodedJWT decodedJWT = decodeToken(token);
-            return decodedJWT.getClaim("userId").asInt();
+            return jwtVerifier.verify(token);
         } catch (Exception e) {
-            throw new IllegalArgumentException("Invalid token or token claim missing");
+            throw new IllegalArgumentException("Invalid token", e);
         }
     }
 
-    public List<Integer> extractRoleId(String token) {
-        return decodeToken(token).getClaim("roleId").asList(Integer.class);
-    }
-
-    public String extractSessionId(String token) {
-        DecodedJWT decodedJWT = JWT_VERIFIER.verify(token);
-        return decodedJWT.getClaim("sessionId").asString();
+    public Map<String, Object> extractClaims(String token) {
+        try {
+            Map<String, Claim> claims = decodeToken(token).getClaims();
+            return Map.of(
+                    "userId", claims.get("userId").asInt(),
+                    "roleId", claims.get("roleId").asList(Integer.class),
+                    "sessionId", claims.get("sessionId").asString()
+            );
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Invalid token or token claim missing", e);
+        }
     }
 
     public boolean isTokenExpired(String token) {
-        return decodeToken(token).getExpiresAt().before(new Date());
+        try {
+            return decodeToken(token).getExpiresAt().before(new Date());
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Invalid token", e);
+        }
     }
 
     public boolean validateToken(String token) {
-        return !isTokenExpired(token);
+        try {
+            return !isTokenExpired(token);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Token validation failed", e);
+        }
+    }
+
+    public long getTokenExpirationTimeInMinutes(String token) {
+        try {
+            DecodedJWT decodedJWT = decodeToken(token);
+            Date expiresAt = decodedJWT.getExpiresAt();
+            long currentTimeMillis = System.currentTimeMillis();
+            long millisecondsRemaining = expiresAt.getTime() - currentTimeMillis;
+            return millisecondsRemaining / (1000 * 60); // Convert milliseconds to minutes
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Invalid token", e);
+        }
+    }
+
+
+    public int getRemainingMinutes(String token) {
+        long secondsRemaining = getTokenExpirationTimeInMinutes(token);
+        return (int) (secondsRemaining / 60); // Convert seconds to minutes
     }
 }

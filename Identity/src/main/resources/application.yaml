@@ -4,3 +4,6 @@ server:
 spring:
   application:
     name: Identity
+jwt:
+  secret_key: "your-very-secure-secret-key"
+  token_expiration_minutes: 180
