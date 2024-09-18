@@ -31,8 +31,7 @@ public class Role {
     private Date createdDate;
     @Column(name = "updated_date")
     private Date updatedDate;
-    @ManyToMany(mappedBy = "roles", cascade = {CascadeType.DETACH, CascadeType.MERGE,
-            CascadeType.PERSIST, CascadeType.REFRESH})
+    @ManyToMany(mappedBy = "roles", cascade = {CascadeType.MERGE, CascadeType.REFRESH})
     @JsonBackReference
     private List<User> users;
 

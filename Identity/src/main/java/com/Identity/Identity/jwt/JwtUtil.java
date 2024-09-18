@@ -91,15 +91,9 @@ public class JwtUtil {
             Date expiresAt = decodedJWT.getExpiresAt();
             long currentTimeMillis = System.currentTimeMillis();
             long millisecondsRemaining = expiresAt.getTime() - currentTimeMillis;
-            return millisecondsRemaining / (1000 * 60); // Convert milliseconds to minutes
+            return millisecondsRemaining / (1000 * 60);
         } catch (Exception e) {
             throw new IllegalArgumentException("Invalid token", e);
         }
-    }
-
-
-    public int getRemainingMinutes(String token) {
-        long secondsRemaining = getTokenExpirationTimeInMinutes(token);
-        return (int) (secondsRemaining / 60); // Convert seconds to minutes
     }
 }

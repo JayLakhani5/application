@@ -2,20 +2,22 @@ package com.usermanagement.usermanagement.service;
 
 import com.opencsv.CSVReader;
 import com.opencsv.exceptions.CsvException;
+import com.usermanagement.usermanagement.dto.RoleMapper;
 import com.usermanagement.usermanagement.dto.Token;
 import com.usermanagement.usermanagement.dto.TokenValidationResponse;
 import com.usermanagement.usermanagement.entity.FileProcessor;
 import com.usermanagement.usermanagement.entity.Role;
 import com.usermanagement.usermanagement.entity.User;
 import com.usermanagement.usermanagement.entity.UserSession;
+import com.usermanagement.usermanagement.enums.Roles;
 import com.usermanagement.usermanagement.enums.Status;
 import com.usermanagement.usermanagement.identity.JwtClient;
 import com.usermanagement.usermanagement.repository.FileProcessorRepository;
 import com.usermanagement.usermanagement.repository.RoleRepository;
 import com.usermanagement.usermanagement.repository.UserRepository;
 import com.usermanagement.usermanagement.repository.UserSessionRepository;
+import com.usermanagement.usermanagement.validations.ValidationUtils;
 import lombok.AllArgsConstructor;
-import org.mindrot.jbcrypt.BCrypt;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
@@ -24,16 +26,11 @@ import org.springframework.web.server.ResponseStatusException;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.util.*;
-import java.util.regex.Pattern;
 
 @AllArgsConstructor
 @Service
 public class FileProcessorService {
 
-    private static final Pattern PASSWORD_PATTERN = Pattern.compile(
-            "^(?=.*[A-Z])(?=.*\\d)(?=.*[@$!%*?&])[A-Za-z\\d@$!%*?&]{9,}$"
-    );
-    private static final Pattern CONTACT_NUMBER_PATTERN = Pattern.compile("^\\d{10}$");
     private final UserRepository userRepository;
     private final FileProcessorRepository fileProcessorRepository;
     private final RoleRepository roleRepository;
@@ -41,6 +38,8 @@ public class FileProcessorService {
     private final UserSessionRepository userSessionRepository;
 
     public String processCsvFile(MultipartFile file, String authorizationHeader) {
+        Roles roles = Roles.ADMIN;
+        String rolesName = roles.getValue();
         Token getToken = new Token();
         getToken.setToken(authorizationHeader);
         TokenValidationResponse tokenResponse = jwtClient.validateToken(getToken);
@@ -50,7 +49,11 @@ public class FileProcessorService {
         if (userSession == null || !userSession.isActive()) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Session is invalid");
         }
-        if (tokenResponse.getRoleId() == null || !tokenResponse.getRoleId().contains(8)) {
+        boolean isAdmin = tokenResponse.getRoleId() != null && tokenResponse.getRoleId().stream()
+                .map(RoleMapper::getRoleName)
+                .filter(Objects::nonNull).anyMatch(role -> role.equals(rolesName));
+
+        if (!isAdmin) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "you are not admin ");
         }
 
@@ -67,7 +70,7 @@ public class FileProcessorService {
 
             for (int i = 1; i < records.size(); i++) {
                 String[] record = records.get(i);
-                if (record.length < 7) {
+                if (record.length < 6) {  // Adjusted length check
                     continue;
                 }
                 String email = record[2];
@@ -91,45 +94,36 @@ public class FileProcessorService {
     }
 
     private User createUser(String[] record) {
-        if (record.length < 7) {
+        if (record.length < 6) {  // Adjusted length check
             throw new IllegalArgumentException("Insufficient data in record");
         }
-        if (isPasswordValid(record[4])) {
-            throw new RuntimeException("Password must be at least 9 characters long, contain at least one uppercase letter, one number, and one special character.");
-        }
-        if (isContactNumberValid(String.valueOf(record[3]))) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Contact number must be exactly 10 digits.");
-        }
+        ValidationUtils.validatePassword(record[4]);
+        ValidationUtils.validateContactNumber(record[3]);
         User user = new User();
         user.setUuid(UUID.randomUUID());
         user.setFirstName(record[0]);
         user.setLastName(record[1]);
         user.setEmail(record[2]);
         user.setContactNumber(record[3]);
-        user.setPassword(hashPassword(record[4]));
-        user.setAdmin(Boolean.parseBoolean(record[5]));
+        user.setPassword(ValidationUtils.hashPassword(record[4]));
         user.setCreatedDate(new Date());
-        setUserRoles(user, record[6]);
+        user.setUpdatedDate(null);
+        setUserRoles(user, record[5]);
         return user;
     }
 
     private void updateUser(User user, String[] record) {
-        if (record.length < 7) {
+        if (record.length < 6) {
             throw new IllegalArgumentException("Insufficient data in record");
         }
-        if (isPasswordValid(record[4])) {
-            throw new RuntimeException("Password must be at least 9 characters long, contain at least one uppercase letter, one number, and one special character.");
-        }
-        if (isContactNumberValid(String.valueOf(record[3]))) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Contact number must be exactly 10 digits.");
-        }
+        ValidationUtils.validatePassword(record[4]);
+        ValidationUtils.validateContactNumber(record[3]);
         user.setFirstName(record[0]);
         user.setLastName(record[1]);
         user.setContactNumber(record[3]);
-        user.setPassword(hashPassword(record[4]));
-        user.setAdmin(Boolean.parseBoolean(record[5]));
+        user.setPassword(ValidationUtils.hashPassword(record[4]));
         user.setUpdatedDate(new Date());
-        setUserRoles(user, record[6]);
+        setUserRoles(user, record[5]);
         userRepository.save(user);
     }
 
@@ -155,7 +149,6 @@ public class FileProcessorService {
             fileProcessor.setUpdatedDate(new Date());
             fileProcessor.setReason(reason);
         } else {
-
             fileProcessor = new FileProcessor();
             fileProcessor.setFileName(fileName);
             fileProcessor.setStatus(status);
@@ -166,18 +159,6 @@ public class FileProcessorService {
         }
 
         fileProcessorRepository.save(fileProcessor);
-    }
-
-    private String hashPassword(String password) {
-        return BCrypt.hashpw(password, BCrypt.gensalt());
-    }
-
-    private boolean isPasswordValid(String password) {
-        return !PASSWORD_PATTERN.matcher(password).matches();
-    }
-
-    private boolean isContactNumberValid(String contactNumber) {
-        return !CONTACT_NUMBER_PATTERN.matcher(contactNumber).matches();
     }
 
 }

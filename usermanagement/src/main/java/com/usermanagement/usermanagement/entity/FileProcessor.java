@@ -23,16 +23,12 @@ public class FileProcessor {
     @Column(name = "status")
     @Enumerated(EnumType.STRING)
     private Status status;
-
     @Column(name = "reason")
     private String reason;
-
     @Column(name = "created_date")
     private Date createdDate;
-
     @Column(name = "updated_date")
     private Date updatedDate;
-
     @OneToOne
     @JoinColumn(name = "user_id")
     private User user;

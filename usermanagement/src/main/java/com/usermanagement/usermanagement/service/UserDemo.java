@@ -3,10 +3,12 @@ package com.usermanagement.usermanagement.service;
 import com.usermanagement.usermanagement.dto.UserResponseDTO;
 import com.usermanagement.usermanagement.entity.Role;
 import com.usermanagement.usermanagement.entity.User;
+import com.usermanagement.usermanagement.entity.UserRoleMapping;
 import com.usermanagement.usermanagement.entity.UserSession;
 import com.usermanagement.usermanagement.identity.JwtClient;
 import com.usermanagement.usermanagement.repository.RoleRepository;
 import com.usermanagement.usermanagement.repository.UserRepository;
+import com.usermanagement.usermanagement.repository.UserRoleMappingRepository;
 import com.usermanagement.usermanagement.repository.UserSessionRepository;
 import com.usermanagement.usermanagement.request.TokenRequest;
 import com.usermanagement.usermanagement.request.UserRequest;
@@ -19,9 +21,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.util.Date;
-import java.util.List;
-import java.util.Optional;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -33,9 +33,10 @@ public class UserDemo {
     private final RoleRepository roleRepository;
     private final JwtClient jwtClient;
     private final UserSessionRepository userSessionRepository;
+    private final UserRoleMappingRepository userRoleMappingRepository;
 
-    // Utility method to create a UserResponseDTO
-    private static UserResponseDTO createUserResponseDTO(User user, TokenResponse token, List<String> roleNames) {
+
+    private static UserResponseDTO createUserResponseDTO(User user, TokenResponse token, Set<String> roleNames) {
         UserResponseDTO userResponseDTO = new UserResponseDTO();
         userResponseDTO.setId(user.getId());
         userResponseDTO.setFirstName(user.getFirstName());
@@ -48,63 +49,82 @@ public class UserDemo {
         return userResponseDTO;
     }
 
-    // Utility method to mask the contact number
     private static String maskContactNumber(String contactNumber) {
-        if (contactNumber == null || contactNumber.length() < 4) {
+        if (contactNumber == null || contactNumber.length() < 10) {
             return contactNumber;
         }
         return contactNumber.substring(0, 2) + "******" + contactNumber.substring(contactNumber.length() - 2);
     }
 
-    // Method to add a new user
     public UserResponseDTO addUser(UserRequest userRequest) {
-        // Validate user input
         ValidationUtils.validatePassword(userRequest.password());
         ValidationUtils.validateContactNumber(String.valueOf(userRequest.contactNumber()));
 
-        // Check for existing email
         Optional<User> byEmail = userRepository.findByEmail(userRequest.email());
+
+        User user;
         if (byEmail.isPresent()) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "This email is already in use: " + userRequest.email());
+            user = byEmail.get();
+            log.info("Updating user with email: {}", userRequest.email());
+            user.setUpdatedDate(new Date());
+            if (!Objects.equals(user.getContactNumber(), userRequest.contactNumber())) {
+                Optional<User> byContactNumber = userRepository.findByContactNumber(userRequest.contactNumber());
+                if (byContactNumber.isPresent() && !Objects.equals(byContactNumber.get().getId(), user.getId())) {
+                    throw new ResponseStatusException(HttpStatus.CONFLICT, "Contact number is already in use: " + userRequest.contactNumber());
+                }
+            }
+        } else {
+            user = new User();
+            user.setCreatedDate(new Date());
+            log.info("Create new user with email: {}", userRequest.email());
+            Optional<User> byContactNumber = userRepository.findByContactNumber(userRequest.contactNumber());
+            if (byContactNumber.isPresent()) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "Contact number is already in use: " + userRequest.contactNumber());
+            }
         }
 
-        // Check for existing contact number
-        Optional<User> byContactNumber = userRepository.findByContactNumber(userRequest.contactNumber());
-        if (byContactNumber.isPresent()) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "This contact number is already in use: " + userRequest.contactNumber());
-        }
-
-        // Create a new user entity
-        User user = new User();
         user.setFirstName(userRequest.firstName());
         user.setLastName(userRequest.lastName());
         user.setEmail(userRequest.email());
         user.setPassword(ValidationUtils.hashPassword(userRequest.password()));
         user.setContactNumber(userRequest.contactNumber());
-        user.setCreatedDate(new Date());
-        user.setAdmin(userRequest.admin());
+        user.setAdmin(true);
+        user = userRepository.save(user);
 
-        // Assign roles to the user
-        for (Integer roleId : userRequest.roleIds()) {
+        if (user.getRoles() == null) {
+            user.setRoles(new ArrayList<>());
+        }
+
+        Set<Integer> uniqueRoleIds = new HashSet<>(userRequest.roleIds());
+        for (Integer roleId : uniqueRoleIds) {
             Optional<Role> roleById = roleRepository.findById(roleId);
             if (roleById.isEmpty()) {
                 throw new RuntimeException("Role with ID " + roleId + " not found.");
             }
             Role role = roleById.get();
-            user.addRole(role);
+            Optional<UserRoleMapping> existingMapping = userRoleMappingRepository.findByUserIdAndRoleId(user, role);
+            if (existingMapping.isPresent()) {
+                UserRoleMapping mapping = existingMapping.get();
+                mapping.setEnable(true);
+                mapping.setUpdateDate(new Date());
+                userRoleMappingRepository.save(mapping);
+            } else {
+                UserRoleMapping userRoleMapping = new UserRoleMapping();
+                userRoleMapping.setUserId(user);
+                userRoleMapping.setRoleId(role);
+                userRoleMapping.setEnable(true);
+                userRoleMapping.setCreateDate(new Date());
+                userRoleMappingRepository.save(userRoleMapping);
+            }
         }
-
-        // Create and save user session
         UserSession userSession = new UserSession();
         userSession.setUser(user);
         userSession.setCreatedDate(new Date());
         userSession.setActive(user.isAdmin());
         userSession = userSessionRepository.save(userSession);
 
-        // Save the user entity
-        user = userRepository.save(user);
-
-        // Generate token for the user
+        // Generate token
         TokenRequest tokenRequest = new TokenRequest(
                 user.getId(),
                 user.getRoles().stream().map(Role::getId).collect(Collectors.toList()),
@@ -113,35 +133,28 @@ public class UserDemo {
         TokenResponse token = jwtClient.createToken(tokenRequest);
         log.info("Generated token: {}", token);
 
-        // Prepare the response DTO
-        List<String> roleNames = user.getRoles().stream()
+        Set<String> roleNames = user.getRoles().stream()
                 .map(Role::getRoleName)
-                .collect(Collectors.toList());
+                .collect(Collectors.toSet());
 
         return createUserResponseDTO(user, token, roleNames);
     }
 
-    // Method to handle user login
-    public ResponseEntity<UserResponseDTO> loginUser(String emailOrContactNumber, String password) {
-        // Find user by email or contact number
-        User user = userRepository.findByEmailOrContactNumber(emailOrContactNumber);
 
-        // Validate user and password
+    public ResponseEntity<UserResponseDTO> loginUser(String emailOrContactNumber, String password) {
+        User user = userRepository.findByEmailOrContactNumber(emailOrContactNumber);
         if (user == null || !ValidationUtils.checkPassword(password, user.getPassword())) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(null);
         }
         if (!user.isAdmin()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "You are not authorized to log in");
         }
-
-        // Create a new user session
         UserSession userSession = new UserSession();
         userSession.setUser(user);
         userSession.setCreatedDate(new Date());
         userSession.setActive(true);
         userSession = userSessionRepository.save(userSession);
 
-        // Generate token for the user
         TokenRequest tokenRequest = new TokenRequest(
                 user.getId(),
                 user.getRoles().stream().map(Role::getId).collect(Collectors.toList()),
@@ -149,13 +162,22 @@ public class UserDemo {
         );
         TokenResponse token = jwtClient.createToken(tokenRequest);
 
-        // Prepare the response DTO
-        List<String> roleNames = user.getRoles().stream()
+        Set<String> roleNames = user.getRoles().stream()
                 .map(Role::getRoleName)
-                .collect(Collectors.toList());
+                .collect(Collectors.toSet());
 
         UserResponseDTO userResponseDTO = createUserResponseDTO(user, token, roleNames);
 
         return ResponseEntity.ok(userResponseDTO);
+    }
+
+    public void logout(UUID sessionId) {
+        UserSession userSession = userSessionRepository.findBySessionId(sessionId);
+        if (userSession == null || !userSession.isActive()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Session is invalid or already inactive");
+        }
+        userSession.setActive(false);
+        userSession.setUpdateDate(new Date());
+        userSessionRepository.save(userSession);
     }
 }

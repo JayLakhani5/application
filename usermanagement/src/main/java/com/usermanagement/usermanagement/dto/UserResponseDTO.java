@@ -3,7 +3,7 @@ package com.usermanagement.usermanagement.dto;
 import lombok.Getter;
 import lombok.Setter;
 
-import java.util.List;
+import java.util.Set;
 
 @Getter
 @Setter
@@ -16,5 +16,5 @@ public class UserResponseDTO {
     private String lastName;
     private String email;
     private String contactNumber;
-    private List<String> roles;
+    private Set<String> roles;
 }

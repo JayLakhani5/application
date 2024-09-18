@@ -2,8 +2,6 @@ package com.usermanagement.usermanagement.rest;
 
 import com.usermanagement.usermanagement.service.FileProcessorService;
 import lombok.AllArgsConstructor;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -15,7 +13,7 @@ import org.springframework.web.multipart.MultipartFile;
 @AllArgsConstructor
 @RestController
 public class FileProcessController {
-    private static final Logger logger = LoggerFactory.getLogger(FileProcessController.class);
+
     private final FileProcessorService fileProcessorService;
 
     @PostMapping("/upload")
@@ -25,4 +23,5 @@ public class FileProcessController {
         String result = fileProcessorService.processCsvFile(file, authorizationHeader);
         return new ResponseEntity<>(result, HttpStatus.OK);
     }
+
 }

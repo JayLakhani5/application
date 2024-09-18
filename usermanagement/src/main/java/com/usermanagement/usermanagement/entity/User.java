@@ -14,7 +14,6 @@ import java.util.UUID;
 @Getter
 @Setter
 @NoArgsConstructor
-
 @Entity
 @Table(name = "user")
 public class User {
@@ -40,8 +39,7 @@ public class User {
     private Date createdDate;
     @Column(name = "updated_date")
     private Date updatedDate;
-    @ManyToMany(cascade = {CascadeType.DETACH, CascadeType.MERGE,
-            CascadeType.PERSIST, CascadeType.REFRESH})
+    @ManyToMany(cascade = {CascadeType.MERGE, CascadeType.REFRESH})
     @JoinTable(
             name = "user_role_mapping",
             joinColumns = @JoinColumn(name = "user_id"),

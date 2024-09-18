@@ -1,6 +1,7 @@
 package com.usermanagement.usermanagement.service;
 
 
+import com.usermanagement.usermanagement.dto.RoleMapper;
 import com.usermanagement.usermanagement.dto.Token;
 import com.usermanagement.usermanagement.dto.TokenValidationResponse;
 import com.usermanagement.usermanagement.entity.Role;
@@ -17,6 +18,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Date;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -28,8 +30,10 @@ public class RoleService {
     private final JwtClient jwtClient;
     private final UserSessionRepository userSessionRepository;
 
+
     public RoleResponse addOrUpdateRole(RoleRequest request, String authHeader) {
         Roles roles = Roles.ADMIN;
+        String adminRole = roles.getValue();
         Token getToken = new Token();
         getToken.setToken(authHeader);
         TokenValidationResponse tokenResponse = jwtClient.validateToken(getToken);
@@ -39,10 +43,14 @@ public class RoleService {
         if (userSession == null || !userSession.isActive()) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Session is invalid");
         }
-        if (tokenResponse.getRoleId() == null || !tokenResponse.getRoleId().contains(roles.getValue())) {
+        boolean isAdmin = tokenResponse.getRoleId() != null && tokenResponse.getRoleId().stream()
+                .map(RoleMapper::getRoleName)
+                .filter(Objects::nonNull)
+                .anyMatch(role -> role.equals(adminRole));
+
+        if (!isAdmin) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You are not an admin");
         }
-
         Optional<Role> existingRoleOptional = roleRepository.findByRoleName(request.getRoleName());
         Role role;
         if (existingRoleOptional.isPresent()) {

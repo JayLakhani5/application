@@ -2,22 +2,18 @@ package com.usermanagement.usermanagement.service;
 
 import com.opencsv.CSVReader;
 import com.opencsv.exceptions.CsvException;
+import com.usermanagement.usermanagement.dto.RoleMapper;
 import com.usermanagement.usermanagement.dto.Token;
 import com.usermanagement.usermanagement.dto.TokenValidationResponse;
-import com.usermanagement.usermanagement.entity.FileProcessor;
-import com.usermanagement.usermanagement.entity.Role;
-import com.usermanagement.usermanagement.entity.User;
-import com.usermanagement.usermanagement.entity.UserSession;
+import com.usermanagement.usermanagement.entity.*;
 import com.usermanagement.usermanagement.enums.Roles;
 import com.usermanagement.usermanagement.enums.Status;
 import com.usermanagement.usermanagement.identity.JwtClient;
-import com.usermanagement.usermanagement.repository.FileProcessorRepository;
-import com.usermanagement.usermanagement.repository.RoleRepository;
-import com.usermanagement.usermanagement.repository.UserRepository;
-import com.usermanagement.usermanagement.repository.UserSessionRepository;
+import com.usermanagement.usermanagement.repository.*;
+import com.usermanagement.usermanagement.validations.ValidationUtils;
+import jakarta.transaction.Transactional;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.mindrot.jbcrypt.BCrypt;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
@@ -26,31 +22,27 @@ import org.springframework.web.server.ResponseStatusException;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.util.*;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.regex.Pattern;
 
 @AllArgsConstructor
 @Service
 @Slf4j
 public class CsvFileService {
-    private static final Pattern PASSWORD_PATTERN = Pattern.compile(
-            "^(?=.*[A-Z])(?=.*\\d)(?=.*[@$!%*?&])[A-Za-z\\d@$!%*?&]{9,}$"
-    );
-    private static final Pattern CONTACT_NUMBER_PATTERN = Pattern.compile("^\\d{10}$");
+
     private final UserRepository userRepository;
     private final FileProcessorRepository fileProcessorRepository;
     private final RoleRepository roleRepository;
+    private final UserRoleMappingRepository userRoleMappingRepository;
     private final JwtClient jwtClient;
     private final UserSessionRepository userSessionRepository;
 
-    // Use virtual thread executor for I/O-bound tasks
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 
+    @Transactional
     public String processCsvFile(MultipartFile file, String authorizationHeader) {
-
-        Roles roles = Roles.ADMIN;
+        // Validate token
         Token getToken = new Token();
         getToken.setToken(authorizationHeader);
         TokenValidationResponse tokenResponse = jwtClient.validateToken(getToken);
@@ -60,10 +52,20 @@ public class CsvFileService {
         if (userSession == null || !userSession.isActive()) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Session is invalid");
         }
-        if (tokenResponse.getRoleId() == null || !tokenResponse.getRoleId().contains(roles.getValue())) {
+
+        // Check if the user has admin rights
+        Roles roles = Roles.ADMIN;
+        String adminRole = roles.getValue();
+        boolean isAdmin = tokenResponse.getRoleId() != null && tokenResponse.getRoleId().stream()
+                .map(RoleMapper::getRoleName)
+                .filter(Objects::nonNull)
+                .anyMatch(role -> role.equals(adminRole));
+
+        if (!isAdmin) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You are not an admin");
         }
 
+        // Validate file
         String fileName = file.getOriginalFilename();
         if (fileName == null || !fileName.endsWith(".csv")) {
             return "Invalid file format. Please upload a CSV file.";
@@ -75,151 +77,184 @@ public class CsvFileService {
                 return "CSV file is empty.";
             }
 
-            // Submit tasks for each record
-            List<Future<?>> futures = new ArrayList<>();
-            for (int i = 1; i < records.size(); i++) {
+            // Process records using virtual threads
+            List<Callable<String>> tasks = new ArrayList<>();
+            for (int i = 1; i < records.size(); i++) { // Skip header
                 String[] record = records.get(i);
-                if (record.length < 7) {
+                if (record.length < 6) {
+                    saveFileProcessor(file.getOriginalFilename(), Status.Error, "Incomplete record at line " + (i + 1), null);
                     continue;
                 }
-                futures.add(executor.submit(() -> processRecord(record, fileName)));
+                tasks.add(createTask(record, file.getOriginalFilename()));
             }
 
-            // Wait for all tasks to complete
-            for (Future<?> future : futures) {
-                try {
-                    future.get(); // Ensure exceptions are propagated
-                } catch (Exception e) {
-                    saveFileProcessor(fileName, Status.Error, "Error processing file: " + e.getMessage(), null);
-                    e.printStackTrace();
-                    return "Error occurred while processing CSV file.";
-                }
+            // Invoke tasks
+            List<String> results = executor.invokeAll(tasks).stream()
+                    .map(future -> {
+                        try {
+                            return future.get();
+                        } catch (Exception e) {
+                            log.error("Error getting result from future: ", e);
+                            return "Failure";
+                        }
+                    })
+                    .toList();
+
+            // Check results
+            if (results.contains("Failure")) {
+                return "Some records could not be processed.";
             }
 
             return "CSV file processed successfully.";
         } catch (IOException | CsvException e) {
-            saveFileProcessor(fileName, Status.Error, "Error processing file: " + e.getMessage(), null);
-            e.printStackTrace();
+            log.error("Error reading CSV file: ", e);
+            saveFileProcessor(file.getOriginalFilename(), Status.Error, "Error reading file: " + e.getMessage(), null);
             return "Error occurred while processing CSV file.";
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
         }
+    }
+
+    private Callable<String> createTask(String[] record, String fileName) {
+        return () -> {
+            try {
+                processRecord(record, fileName);
+                return "Success";
+            } catch (Exception e) {
+                log.error("Error processing record: ", e);
+                saveFileProcessor(fileName, Status.Error, "Error processing record: " + e.getMessage(), null);
+                return "Failure";
+            }
+        };
     }
 
     private void processRecord(String[] record, String fileName) {
         try {
-            log.info("CSV process record..");
             String email = record[2];
             Optional<User> existingUser = userRepository.findByEmail(email);
-            if (existingUser.isPresent()) {
-                User user = existingUser.get();
-                updateUser(user, record);
-                saveFileProcessor(fileName, Status.Success, "User updated successfully.", user);
-            } else {
-                User newUser = createUser(record);
-                log.info("new user => {}", newUser);
-                userRepository.save(newUser);
-                saveFileProcessor(fileName, Status.Success, "User created successfully.", newUser);
+            User user;
 
+            if (existingUser.isPresent()) {
+                user = existingUser.get();
+                updateUser(user, record);
+            } else {
+                user = createUser(record);
+                user = userRepository.save(user);
             }
+
+            // Assuming record[5] contains the role IDs as a comma-separated string
+            String[] roleIds = record[5].split(",");
+            for (String roleId : roleIds) {
+                saveUserRoleMapping(user, roleId);
+            }
+
+            log.info("User processed: {}", user);
+            saveFileProcessor(fileName, Status.Success, "User processed successfully.", user);
         } catch (Exception e) {
+            log.error("Error processing record: ", e);
             saveFileProcessor(fileName, Status.Error, "Error processing record: " + e.getMessage(), null);
-            e.printStackTrace();
         }
     }
 
     private User createUser(String[] record) {
-        if (record.length < 7) {
+        if (record.length < 6) {
             throw new IllegalArgumentException("Insufficient data in record");
         }
-        if (!isPasswordValid(record[4])) {
-            throw new RuntimeException("Password must be at least 9 characters long, contain at least one uppercase letter, one number, and one special character.");
-        }
-        if (!isContactNumberValid(String.valueOf(record[3]))) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Contact number must be exactly 10 digits.");
-        }
+        ValidationUtils.validatePassword(record[4]);
+        ValidationUtils.validateContactNumber(record[3]);
         User user = new User();
         user.setUuid(UUID.randomUUID());
         user.setFirstName(record[0]);
         user.setLastName(record[1]);
         user.setEmail(record[2]);
         user.setContactNumber(record[3]);
-        user.setPassword(hashPassword(record[4]));
-        user.setAdmin(Boolean.parseBoolean(record[5]));
+        user.setPassword(ValidationUtils.hashPassword(record[4]));
+        user.setAdmin(false);
         user.setCreatedDate(new Date());
-        setUserRoles(user, record[6]);
-        if (user == null) {
-            throw new RuntimeException("User creation failed.");
-        }
+        user.setUpdatedDate(null);
+        setUserRoles(user, record[5]);
+        log.info("Created user: {}", user);
         return user;
     }
 
-
     private void updateUser(User user, String[] record) {
-        if (record.length < 7) {
+        if (record.length < 6) {
             throw new IllegalArgumentException("Insufficient data in record");
         }
-        if (!isPasswordValid(record[4])) {
-            throw new RuntimeException("Password must be at least 9 characters long, contain at least one uppercase letter, one number, and one special character.");
-        }
-        if (!isContactNumberValid(record[3])) {
-            throw new RuntimeException("Contact number must be exactly 10 digits.");
-        }
+        ValidationUtils.validatePassword(record[4]);
+        ValidationUtils.validateContactNumber(record[3]);
         user.setFirstName(record[0]);
         user.setLastName(record[1]);
         user.setContactNumber(record[3]);
-        user.setPassword(hashPassword(record[4]));
-        user.setAdmin(Boolean.parseBoolean(record[5]));
+        user.setPassword(ValidationUtils.hashPassword(record[4]));
         user.setUpdatedDate(new Date());
-        setUserRoles(user, record[6]);
+        setUserRoles(user, record[5]);
         userRepository.save(user);
     }
 
     private void setUserRoles(User user, String rolesString) {
         String[] roleIds = rolesString.split(",");
         List<Role> roles = new ArrayList<>();
+
         for (String roleId : roleIds) {
-            Optional<Role> role = roleRepository.findById(Integer.parseInt(roleId.trim()));
-            role.ifPresent(roles::add);
+            Optional<Role> roleOptional = roleRepository.findById(Integer.parseInt(roleId.trim()));
+            if (roleOptional.isPresent()) {
+                Role role = roleOptional.get();
+                roles.add(role); // Role is now managed by the persistence context
+            } else {
+                log.warn("Role with ID {} not found", roleId.trim());
+            }
         }
+
         user.setRoles(roles);
     }
 
-    private void saveFileProcessor(String fileName, Status status, String reason, User user) {
-        Optional<FileProcessor> existingFileProcessor = fileProcessorRepository.findFirstByUserId(user.getId());
-        if (user == null) {
-            log.warn("Cannot save file processor record: user is null");
-            return; // Exit early if user is null
-        }
-        System.out.println("user id ->" + user.getId());
-        FileProcessor fileProcessor;
+    private void saveUserRoleMapping(User user, String roleId) {
+        Optional<Role> roleOptional = roleRepository.findById(Integer.parseInt(roleId.trim()));
+        if (roleOptional.isPresent()) {
+            Role role = roleOptional.get();
+            // Check if UserRoleMapping already exists
+            Optional<UserRoleMapping> existingMapping = userRoleMappingRepository.findByUserIdAndRoleId(user, role);
 
-        if (existingFileProcessor.isPresent()) {
-            fileProcessor = existingFileProcessor.get();
-            fileProcessor.setFileName(fileName);
-            fileProcessor.setStatus(status);
-            fileProcessor.setUpdatedDate(new Date());
-            fileProcessor.setReason(reason);
+            if (existingMapping.isPresent()) {
+                // Update existing mapping
+                UserRoleMapping mapping = existingMapping.get();
+                mapping.setEnable(true); // Ensure enable is set to true
+                mapping.setUpdateDate(new Date()); // Set the update date
+                userRoleMappingRepository.save(mapping);
+            } else {
+                // Create a new UserRoleMapping
+                UserRoleMapping userRoleMapping = new UserRoleMapping();
+                userRoleMapping.setUserId(user);
+                userRoleMapping.setRoleId(role);
+                userRoleMapping.setEnable(true);
+                userRoleMapping.setCreateDate(new Date());
+                userRoleMapping.setUpdateDate(new Date());
+                userRoleMappingRepository.save(userRoleMapping);
+            }
         } else {
-            fileProcessor = new FileProcessor();
-            fileProcessor.setFileName(fileName);
-            fileProcessor.setStatus(status);
-            fileProcessor.setCreatedDate(new Date());
-            fileProcessor.setUpdatedDate(new Date());
-            fileProcessor.setReason(reason);
-            fileProcessor.setUser(user);
+            log.warn("Role with ID {} not found for user {}", roleId, user.getEmail());
+        }
+    }
+
+    private void saveFileProcessor(String fileName, Status status, String reason, User user) {
+        FileProcessor fileProcessor = new FileProcessor();
+        fileProcessor.setFileName(fileName);
+        fileProcessor.setStatus(status);
+        fileProcessor.setCreatedDate(new Date());
+        fileProcessor.setUpdatedDate(new Date());
+        fileProcessor.setReason(reason);
+
+        if (user != null) {
+            Optional<FileProcessor> existingFileProcessor = fileProcessorRepository.findFirstByUserId(user.getId());
+            if (existingFileProcessor.isPresent()) {
+                fileProcessor = existingFileProcessor.get();
+                fileProcessor.setUpdatedDate(new Date());
+            } else {
+                fileProcessor.setUser(user);
+            }
         }
 
         fileProcessorRepository.save(fileProcessor);
-    }
-
-    private String hashPassword(String password) {
-        return BCrypt.hashpw(password, BCrypt.gensalt());
-    }
-
-    private boolean isPasswordValid(String password) {
-        return PASSWORD_PATTERN.matcher(password).matches();
-    }
-
-    private boolean isContactNumberValid(String contactNumber) {
-        return CONTACT_NUMBER_PATTERN.matcher(contactNumber).matches();
     }
 }
