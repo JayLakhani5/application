@@ -95,6 +95,9 @@ public class UserDemo {
         if (user.getRoles() == null) {
             user.setRoles(new ArrayList<>());
         }
+        if (userRequest.roleIds() == null || userRequest.roleIds().isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Role IDs are required.");
+        }
 
         Set<Integer> uniqueRoleIds = new HashSet<>(userRequest.roleIds());
         for (Integer roleId : uniqueRoleIds) {
@@ -148,6 +151,13 @@ public class UserDemo {
         }
         if (!user.isAdmin()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "You are not authorized to log in");
+        }
+        // Check UserRoleMapping for enable status
+        List<UserRoleMapping> roleMappings = userRoleMappingRepository.findByUserId(user);
+        for (UserRoleMapping mapping : roleMappings) {
+            if (!mapping.getEnable()) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "User role mapping is disabled. Access denied.");
+            }
         }
         UserSession userSession = new UserSession();
         userSession.setUser(user);

@@ -76,7 +76,6 @@ public class CsvFileService {
             if (records.isEmpty()) {
                 return "CSV file is empty.";
             }
-
             // Process records using virtual threads
             List<Callable<String>> tasks = new ArrayList<>();
             for (int i = 1; i < records.size(); i++) { // Skip header
@@ -104,7 +103,6 @@ public class CsvFileService {
             if (results.contains("Failure")) {
                 return "Some records could not be processed.";
             }
-
             return "CSV file processed successfully.";
         } catch (IOException | CsvException e) {
             log.error("Error reading CSV file: ", e);
@@ -137,9 +135,11 @@ public class CsvFileService {
             if (existingUser.isPresent()) {
                 user = existingUser.get();
                 updateUser(user, record);
+                saveFileProcessor(fileName, Status.Success, "User updated successfully.", user);
             } else {
                 user = createUser(record);
-                user = userRepository.save(user);
+                user = userRepository.save(user); // Persist the new user
+                saveFileProcessor(fileName, Status.Init, "New user created successfully.", user);
             }
 
             // Assuming record[5] contains the role IDs as a comma-separated string
@@ -149,7 +149,6 @@ public class CsvFileService {
             }
 
             log.info("User processed: {}", user);
-            saveFileProcessor(fileName, Status.Success, "User processed successfully.", user);
         } catch (Exception e) {
             log.error("Error processing record: ", e);
             saveFileProcessor(fileName, Status.Error, "Error processing record: " + e.getMessage(), null);
@@ -249,12 +248,13 @@ public class CsvFileService {
             Optional<FileProcessor> existingFileProcessor = fileProcessorRepository.findFirstByUserId(user.getId());
             if (existingFileProcessor.isPresent()) {
                 fileProcessor = existingFileProcessor.get();
+                fileProcessor.setStatus(status);
+                fileProcessor.setReason(reason);
                 fileProcessor.setUpdatedDate(new Date());
             } else {
-                fileProcessor.setUser(user);
+                fileProcessor.setUser(user); // Ensure user is persisted
             }
         }
-
         fileProcessorRepository.save(fileProcessor);
     }
 }
