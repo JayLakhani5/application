@@ -27,7 +27,7 @@ import java.util.stream.Collectors;
 @Slf4j
 @RequiredArgsConstructor
 @Service
-public class UserDemo {
+public class UserSingUpService {
 
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
@@ -106,6 +106,9 @@ public class UserDemo {
                 throw new RuntimeException("Role with ID " + roleId + " not found.");
             }
             Role role = roleById.get();
+            if (!role.isAdmin()) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Role with ID " + roleId + " is not enabled.");
+            }
             Optional<UserRoleMapping> existingMapping = userRoleMappingRepository.findByUserIdAndRoleId(user, role);
             if (existingMapping.isPresent()) {
                 UserRoleMapping mapping = existingMapping.get();
@@ -147,7 +150,7 @@ public class UserDemo {
     public ResponseEntity<UserResponseDTO> loginUser(String emailOrContactNumber, String password) {
         User user = userRepository.findByEmailOrContactNumber(emailOrContactNumber);
         if (user == null || !ValidationUtils.checkPassword(password, user.getPassword())) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(null);
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Not match email or contact number and password");
         }
         if (!user.isAdmin()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "You are not authorized to log in");

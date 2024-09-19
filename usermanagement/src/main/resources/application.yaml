@@ -12,6 +12,4 @@ spring:
     multipart:
       enabled: true
 
-user:
-  password-pattern: '^(?=.*[A-Z])(?=.*\\d)(?=.*[@$!%*?&])[A-Za-z\\d@$!%*?&]{9,}$'
-  contact-number-pattern: '^\\d{10}$'
+

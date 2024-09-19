@@ -15,6 +15,5 @@ public record UserRequest(
         Date updatedDate,
         List<Integer> roleIds
 ) {
-
 }
 

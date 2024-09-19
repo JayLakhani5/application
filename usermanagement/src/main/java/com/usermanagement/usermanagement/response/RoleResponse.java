@@ -9,7 +9,6 @@ import java.util.Date;
 @Getter
 @Setter
 @NoArgsConstructor
-
 public class RoleResponse {
 
     private int id;
@@ -18,6 +17,5 @@ public class RoleResponse {
     private boolean admin;
     private Date createdDate;
     private Date updatedDate;
-
 }
 

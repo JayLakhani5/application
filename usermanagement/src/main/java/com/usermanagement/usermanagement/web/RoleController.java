@@ -1,4 +1,4 @@
-package com.usermanagement.usermanagement.rest;
+package com.usermanagement.usermanagement.web;
 
 import com.usermanagement.usermanagement.entity.Role;
 import com.usermanagement.usermanagement.repository.RoleRepository;

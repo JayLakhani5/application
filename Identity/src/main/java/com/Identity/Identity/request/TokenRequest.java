@@ -9,7 +9,6 @@ import java.util.UUID;
 @Getter
 @Setter
 public class TokenRequest {
-
     private Integer userId;
     private List<Integer> roleId;
     private UUID sessionId;

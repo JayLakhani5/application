@@ -1,4 +1,4 @@
-package com.usermanagement.usermanagement.rest;
+package com.usermanagement.usermanagement.web;
 
 import com.usermanagement.usermanagement.dto.UserAndRoleDTO;
 import com.usermanagement.usermanagement.dto.UserUpdateDTO;
@@ -25,9 +25,8 @@ public class UserRestController {
         return userService.getUserById(authorizationHeader);
     }
 
-    @PostMapping("/user/{userId}")
-    public UserUpdateDTO updateUser(@PathVariable("userId") int id, @RequestBody UserRequest request, @RequestHeader("Authorization") String authorizationHeader) {
-        return userService.updateUser(authorizationHeader, id, request);
+    @PutMapping("/user")
+    public UserUpdateDTO updateUser(@RequestBody UserRequest request, @RequestHeader("Authorization") String authorizationHeader) {
+        return userService.updateUser(authorizationHeader, request);
     }
-
 }

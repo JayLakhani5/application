@@ -12,6 +12,7 @@ import com.usermanagement.usermanagement.repository.RoleRepository;
 import com.usermanagement.usermanagement.repository.UserSessionRepository;
 import com.usermanagement.usermanagement.request.RoleRequest;
 import com.usermanagement.usermanagement.response.RoleResponse;
+import feign.FeignException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -32,11 +33,23 @@ public class RoleService {
 
 
     public RoleResponse addOrUpdateRole(RoleRequest request, String authHeader) {
+        if (Objects.equals(authHeader, "")) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "token is required");
+        }
         Roles roles = Roles.ADMIN;
         String adminRole = roles.getValue();
         Token getToken = new Token();
         getToken.setToken(authHeader);
-        TokenValidationResponse tokenResponse = jwtClient.validateToken(getToken);
+        TokenValidationResponse tokenResponse;
+        try {
+            tokenResponse = jwtClient.validateToken(getToken);
+        } catch (FeignException e) {
+            if (e.status() == 401) {
+                throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Token is invalid or malformed");
+            } else {
+                throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Error validating token");
+            }
+        }
         UUID sessionId = UUID.fromString(tokenResponse.getSessionId());
         UserSession userSession = userSessionRepository.findBySessionId(sessionId);
 

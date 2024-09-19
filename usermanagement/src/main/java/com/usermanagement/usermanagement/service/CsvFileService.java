@@ -11,6 +11,7 @@ import com.usermanagement.usermanagement.enums.Status;
 import com.usermanagement.usermanagement.identity.JwtClient;
 import com.usermanagement.usermanagement.repository.*;
 import com.usermanagement.usermanagement.validations.ValidationUtils;
+import feign.FeignException;
 import jakarta.transaction.Transactional;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -42,10 +43,22 @@ public class CsvFileService {
 
     @Transactional
     public String processCsvFile(MultipartFile file, String authorizationHeader) {
+        if (Objects.equals(authorizationHeader, "")) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "token is required");
+        }
         // Validate token
         Token getToken = new Token();
         getToken.setToken(authorizationHeader);
-        TokenValidationResponse tokenResponse = jwtClient.validateToken(getToken);
+        TokenValidationResponse tokenResponse;
+        try {
+            tokenResponse = jwtClient.validateToken(getToken);
+        } catch (FeignException e) {
+            if (e.status() == 401) {
+                throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Token is invalid or malformed");
+            } else {
+                throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Error validating token");
+            }
+        }
         UUID sessionId = UUID.fromString(tokenResponse.getSessionId());
         UserSession userSession = userSessionRepository.findBySessionId(sessionId);
 
@@ -199,12 +212,14 @@ public class CsvFileService {
             Optional<Role> roleOptional = roleRepository.findById(Integer.parseInt(roleId.trim()));
             if (roleOptional.isPresent()) {
                 Role role = roleOptional.get();
-                roles.add(role); // Role is now managed by the persistence context
+                if (!role.isAdmin()) {
+                    throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Role with ID " + roleId + " is not enabled.");
+                }
+                roles.add(role);
             } else {
                 log.warn("Role with ID {} not found", roleId.trim());
             }
         }
-
         user.setRoles(roles);
     }
 
@@ -241,7 +256,7 @@ public class CsvFileService {
         fileProcessor.setFileName(fileName);
         fileProcessor.setStatus(status);
         fileProcessor.setCreatedDate(new Date());
-        fileProcessor.setUpdatedDate(new Date());
+        fileProcessor.setUpdatedDate(null);
         fileProcessor.setReason(reason);
 
         if (user != null) {

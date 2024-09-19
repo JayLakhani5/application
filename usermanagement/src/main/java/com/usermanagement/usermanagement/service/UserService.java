@@ -28,6 +28,9 @@ public class UserService {
 
 
     public List<UserAndRoleDTO> getAllUsersWithRoles(String authHeader) {
+        if (Objects.equals(authHeader, "")) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "token is required");
+        }
         Roles roles = Roles.ADMIN;
         String adminRole = roles.getValue();
         Token getToken = new Token();
@@ -44,7 +47,6 @@ public class UserService {
         } catch (Exception e) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "An unexpected error occurred: " + e.getMessage(), e);
         }
-
         UUID sessionId = UUID.fromString(tokenResponse.getSessionId());
         UserSession userSession = userSessionRepository.findBySessionId(sessionId);
 
@@ -86,11 +88,23 @@ public class UserService {
                 .build();
     }
 
-
     public UserAndRoleDTO getUserById(String authHeader) {
+        if (Objects.equals(authHeader, "")) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "token is required");
+        }
         Token getToken = new Token();
         getToken.setToken(authHeader);
-        TokenValidationResponse validationResponse = jwtClient.validateToken(getToken);
+
+        TokenValidationResponse validationResponse;
+        try {
+            validationResponse = jwtClient.validateToken(getToken);
+        } catch (FeignException e) {
+            if (e.status() == 401) {
+                throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Token is invalid or malformed");
+            } else {
+                throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Error validating token");
+            }
+        }
         UUID sessionId = UUID.fromString(validationResponse.getSessionId());
         UserSession userSession = userSessionRepository.findBySessionId(sessionId);
 
@@ -116,22 +130,34 @@ public class UserService {
         }
     }
 
-    public UserUpdateDTO updateUser(String authHeader, int userId, UserRequest userRequest) {
+    public UserUpdateDTO updateUser(String authHeader, UserRequest userRequest) {
+        if (Objects.equals(authHeader, "")) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "token is required");
+        }
         Token getToken = new Token();
         getToken.setToken(authHeader);
-        TokenValidationResponse validationResponse = jwtClient.validateToken(getToken);
+        TokenValidationResponse validationResponse;
+        try {
+            validationResponse = jwtClient.validateToken(getToken);
+        } catch (FeignException e) {
+            if (e.status() == 401) {
+                throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Token is invalid or malformed");
+            } else {
+                throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Error validating token");
+            }
+        }
         UUID sessionId = UUID.fromString(validationResponse.getSessionId());
         UserSession userSession = userSessionRepository.findBySessionId(sessionId);
 
         if (userSession == null || !userSession.isActive()) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Session is invalid");
         }
-        if (!validationResponse.getUserId().equals(userId)) {
+        if (!validationResponse.getUserId().equals(validationResponse.getUserId())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Unauthorized access: Token does not match user ID.");
         }
-        Optional<User> existingUserOpt = userRepository.findById(userId);
+        Optional<User> existingUserOpt = userRepository.findById(validationResponse.getUserId());
         if (existingUserOpt.isEmpty()) {
-            throw new RuntimeException("User not found with id " + userId);
+            throw new RuntimeException("User not found with id " + validationResponse.getUserId());
         }
         User user = existingUserOpt.get();
 
@@ -147,7 +173,7 @@ public class UserService {
 
         if (!Objects.equals(user.getContactNumber(), userRequest.contactNumber())) {
             Optional<User> byContactNumber = userRepository.findByContactNumber(userRequest.contactNumber());
-            if (byContactNumber.isPresent() && byContactNumber.get().getId() != userId) {
+            if (byContactNumber.isPresent() && byContactNumber.get().getId() != validationResponse.getUserId()) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "Contact number is already in use: " + userRequest.contactNumber());
             }
         }
@@ -157,7 +183,7 @@ public class UserService {
         user.setEmail(userRequest.email());
         user.setPassword(ValidationUtils.hashPassword(userRequest.password()));
         user.setContactNumber(userRequest.contactNumber());
-        user.setAdmin(userRequest.admin());
+        user.setAdmin(true);
         user.setUpdatedDate(new Date());
         userRepository.save(user);
 
